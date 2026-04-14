@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"awesomeProject/environment"
 	"awesomeProject/models"
 	"bytes"
 	"context"
@@ -8,9 +9,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -18,6 +21,30 @@ import (
 
 var testDB *mongo.Database
 var testClient *mongo.Client
+var testConfig = environment.Config{
+	MongoURI:   "mongodb://localhost:27017",
+	KafkaTopic: "test-topic",
+}
+
+type MockKafkaProducer struct {
+	mu       sync.Mutex
+	Messages []*kgo.Record
+}
+
+func (m *MockKafkaProducer) Produce(ctx context.Context, r *kgo.Record, cb func(*kgo.Record, error)) {
+	m.mu.Lock()
+	m.Messages = append(m.Messages, r)
+	m.mu.Unlock()
+	go cb(r, nil)
+}
+
+func (m *MockKafkaProducer) Clear() {
+	m.mu.Lock()
+	m.Messages = nil
+	m.mu.Unlock()
+}
+
+var mockKP = &MockKafkaProducer{}
 
 func TestMain(m *testing.M) {
 	gin.SetMode(gin.TestMode)
@@ -52,7 +79,7 @@ func TestMain(m *testing.M) {
 
 func setupRouter() (*gin.Engine, *UserController) {
 	r := gin.New()
-	uc := NewUserController(r, testDB)
+	uc := NewUserController(r, testDB, mockKP, &testConfig)
 	r.POST("/users", uc.CreateUser)
 	r.GET("/users", uc.GetUsers)
 	r.GET("/users/:id", uc.GetUserById)
@@ -61,6 +88,7 @@ func setupRouter() (*gin.Engine, *UserController) {
 }
 
 func TestCreateUser(t *testing.T) {
+	mockKP.Clear()
 	r, _ := setupRouter()
 
 	user := models.User{
@@ -90,6 +118,35 @@ func TestCreateUser(t *testing.T) {
 	}
 	if createdUser.UserId.IsZero() {
 		t.Error("Expected UserId to be set")
+	}
+
+	// Verify Kafka message
+	if len(mockKP.Messages) != 1 {
+		t.Errorf("Expected 1 Kafka message, got %d", len(mockKP.Messages))
+	} else {
+		msg := mockKP.Messages[0]
+		if msg.Topic != testConfig.KafkaTopic {
+			t.Errorf("Expected topic %s, got %s", testConfig.KafkaTopic, msg.Topic)
+		}
+		var userCreated models.UserCreated
+		if err := json.Unmarshal(msg.Value, &userCreated); err != nil {
+			t.Errorf("Failed to unmarshal Kafka message: %v", err)
+		}
+		if userCreated.Name != user.Name || userCreated.Email != user.Email {
+			t.Errorf("Kafka message content mismatch. Expected %v, got %v", user, userCreated.User)
+		}
+		if userCreated.EventName != models.EventTypeUserCreated {
+			t.Errorf("Expected event name %s, got %s", models.EventTypeUserCreated, userCreated.EventName)
+		}
+		// Verify flat structure (JSON unmarshal to map should have fields at top level)
+		var flatMap map[string]any
+		_ = json.Unmarshal(msg.Value, &flatMap)
+		if _, ok := flatMap["name"]; !ok {
+			t.Error("Expected 'name' field at top level of Kafka message")
+		}
+		if _, ok := flatMap["event_name"]; !ok {
+			t.Error("Expected 'event_name' field at top level of Kafka message")
+		}
 	}
 }
 
@@ -172,6 +229,7 @@ func TestGetUserById(t *testing.T) {
 }
 
 func TestDeleteUser(t *testing.T) {
+	mockKP.Clear()
 	r, _ := setupRouter()
 
 	// Seed data
@@ -199,7 +257,25 @@ func TestDeleteUser(t *testing.T) {
 		t.Errorf("Expected deletedCount 1, got %v", response["deletedCount"])
 	}
 
+	// Verify Kafka message
+	if len(mockKP.Messages) != 1 {
+		t.Errorf("Expected 1 Kafka message, got %d", len(mockKP.Messages))
+	} else {
+		msg := mockKP.Messages[0]
+		var userDeleted models.UserDeleted
+		if err := json.Unmarshal(msg.Value, &userDeleted); err != nil {
+			t.Errorf("Failed to unmarshal Kafka message: %v", err)
+		}
+		if userDeleted.Id != id {
+			t.Errorf("Expected deleted ID %s, got %s", id, userDeleted.Id)
+		}
+		if userDeleted.EventName != models.EventTypeUserDeleted {
+			t.Errorf("Expected event name %s, got %s", models.EventTypeUserDeleted, userDeleted.EventName)
+		}
+	}
+
 	// Test not found case
+	mockKP.Clear()
 	fakeId := bson.NewObjectID().Hex()
 	req, _ = http.NewRequestWithContext(t.Context(), "DELETE", "/users/"+fakeId, nil)
 	w = httptest.NewRecorder()
@@ -212,13 +288,27 @@ func TestDeleteUser(t *testing.T) {
 	if response["deletedCount"].(float64) != 0 {
 		t.Errorf("Expected deletedCount 0 for fake ID, got %v", response["deletedCount"])
 	}
+	// Even if not found in DB, current implementation still produces message?
+	// Let's check:
+	// res, err := userCollection.DeleteOne(...)
+	// if err != nil { ... return }
+	// userDeleted := ...
+	// produceMessage(...)
+	// Yes, it currently produces message even if deletedCount is 0.
+	if len(mockKP.Messages) != 1 {
+		t.Errorf("Expected 1 Kafka message for fake ID, got %d", len(mockKP.Messages))
+	}
 
 	// Test invalid ID case
+	mockKP.Clear()
 	req, _ = http.NewRequestWithContext(t.Context(), "DELETE", "/users/invalid-id", nil)
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("Expected status 400 for invalid ID, got %d", w.Code)
+	}
+	if len(mockKP.Messages) != 0 {
+		t.Errorf("Expected 0 Kafka messages for invalid ID, got %d", len(mockKP.Messages))
 	}
 }

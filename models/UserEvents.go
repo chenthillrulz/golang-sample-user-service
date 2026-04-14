@@ -11,15 +11,15 @@ type EventDetails struct {
 }
 
 type UserCreated struct {
-	User
-	EventDetails
+	User         `json:",inline" bson:",inline"`
+	EventDetails `json:",inline" bson:",inline"`
 }
 type UserUpdated struct {
-	User
-	EventDetails
+	User         `json:",inline" bson:",inline"`
+	EventDetails `json:",inline" bson:",inline"`
 }
 
 type UserDeleted struct {
-	Id string `json:"id" bson:"_id" required:"true"`
-	EventDetails
+	Id           string `json:"id" bson:"_id" required:"true"`
+	EventDetails `json:",inline" bson:",inline"`
 }

@@ -15,15 +15,19 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
+type KafkaProducer interface {
+	Produce(ctx context.Context, r *kgo.Record, cb func(*kgo.Record, error))
+}
+
 type UserController struct {
 	Gin    *gin.Engine
 	db     *mongo.Database
-	kc     *kgo.Client
+	kp     KafkaProducer
 	config *environment.Config
 }
 
-func NewUserController(r *gin.Engine, db *mongo.Database, kc *kgo.Client, config *environment.Config) *UserController {
-	return &UserController{Gin: r, db: db, kc: kc, config: config}
+func NewUserController(r *gin.Engine, db *mongo.Database, kp KafkaProducer, config *environment.Config) *UserController {
+	return &UserController{Gin: r, db: db, kp: kp, config: config}
 }
 
 func (uc *UserController) DeleteUser(r *gin.Context) {
@@ -41,7 +45,19 @@ func (uc *UserController) DeleteUser(r *gin.Context) {
 		return
 	}
 
-	//uc.kc.produce(uc.config.KafkaTopic, []byte(id))
+	userDeleted := models.UserDeleted{
+		Id: id,
+		EventDetails: models.EventDetails{
+			EventName:     models.EventTypeUserDeleted,
+			EventDateTime: time.Now().Format(time.RFC3339),
+		},
+	}
+	message, _ := json.Marshal(userDeleted)
+	err = produceMessage(uc.kp, string(message), uc.config.KafkaTopic)
+	if err != nil {
+		// Log the error, but respond successfully as the object was created
+		fmt.Println("Error producing message: ", err)
+	}
 
 	r.JSON(http.StatusOK, gin.H{"deletedCount": res.DeletedCount, "id": objectID})
 }
@@ -104,12 +120,12 @@ func (uc *UserController) CreateUser(r *gin.Context) {
 	userCreated := models.UserCreated{
 		User: user,
 		EventDetails: models.EventDetails{
-			EventDateTime: time.Now().Format(time.RFC3339),
 			EventName:     models.EventTypeUserCreated,
+			EventDateTime: time.Now().Format(time.RFC3339),
 		},
 	}
 	message, _ := json.Marshal(userCreated)
-	err = produceMessage(uc.kc, string(message), uc.config.KafkaTopic)
+	err = produceMessage(uc.kp, string(message), uc.config.KafkaTopic)
 	if err != nil {
 		// Log the error, but respond successfully as the object was created
 		fmt.Println("Error producing message: ", err)
