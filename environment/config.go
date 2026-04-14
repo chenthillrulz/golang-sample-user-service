@@ -1,5 +1,13 @@
 package environment
 
 type Config struct {
-	mongoURI string
+	MongoURI   string
+	KafkaTopic string
+}
+
+func InitializeConfig() Config {
+	return Config{
+		MongoURI:   "mongodb://localhost:27017",
+		KafkaTopic: "user-events",
+	}
 }

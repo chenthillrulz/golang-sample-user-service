@@ -2,11 +2,13 @@ package main
 
 import (
 	"awesomeProject/controller"
+	"awesomeProject/environment"
 	"awesomeProject/models"
 	"fmt"
 	"os"
 
 	"github.com/gin-gonic/gin"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
@@ -36,7 +38,22 @@ func main() {
 		panic(err)
 	}
 
-	userController := controller.NewUserController(r, database)
+	// Setup kafka
+	seedBrokers := os.Getenv("KAFKA_SEED_BROKERS")
+	if seedBrokers == "" {
+		seedBrokers = "localhost:9092"
+	}
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(seedBrokers),
+	)
+	if err != nil {
+		fmt.Println("Error connecting to Kafka")
+		panic(err)
+	}
+	defer cl.Close()
+
+	config := environment.InitializeConfig()
+	userController := controller.NewUserController(r, database, cl, &config)
 
 	r.GET("/hello", func(c *gin.Context) {
 		c.String(200, "Hello, World!")

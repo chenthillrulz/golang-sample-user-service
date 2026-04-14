@@ -1,22 +1,29 @@
 package controller
 
 import (
+	"awesomeProject/environment"
 	"awesomeProject/models"
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )
 
 type UserController struct {
-	Gin *gin.Engine
-	db  *mongo.Database
+	Gin    *gin.Engine
+	db     *mongo.Database
+	kc     *kgo.Client
+	config *environment.Config
 }
 
-func NewUserController(r *gin.Engine, db *mongo.Database) *UserController {
-	return &UserController{Gin: r, db: db}
+func NewUserController(r *gin.Engine, db *mongo.Database, kc *kgo.Client, config *environment.Config) *UserController {
+	return &UserController{Gin: r, db: db, kc: kc, config: config}
 }
 
 func (uc *UserController) DeleteUser(r *gin.Context) {
@@ -33,6 +40,9 @@ func (uc *UserController) DeleteUser(r *gin.Context) {
 		r.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete user", "details": err.Error()})
 		return
 	}
+
+	//uc.kc.produce(uc.config.KafkaTopic, []byte(id))
+
 	r.JSON(http.StatusOK, gin.H{"deletedCount": res.DeletedCount, "id": objectID})
 }
 
@@ -90,6 +100,19 @@ func (uc *UserController) CreateUser(r *gin.Context) {
 		return
 	}
 	user.UserId = result.InsertedID.(bson.ObjectID)
+
+	userCreated := models.UserCreated{
+		User: user,
+		EventDetails: models.EventDetails{
+			EventDateTime: time.Now().Format(time.RFC3339),
+		},
+	}
+	message, _ := json.Marshal(userCreated)
+	err = produceMessage(uc.kc, string(message), uc.config.KafkaTopic)
+	if err != nil {
+		// Log the error, but respond successfully as the object was created
+		fmt.Println("Error producing message: ", err)
+	}
 
 	r.JSON(http.StatusCreated, gin.H{"user": user})
 }
