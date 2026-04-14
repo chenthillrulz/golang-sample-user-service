@@ -105,6 +105,7 @@ func (uc *UserController) CreateUser(r *gin.Context) {
 		User: user,
 		EventDetails: models.EventDetails{
 			EventDateTime: time.Now().Format(time.RFC3339),
+			EventName:     models.EventTypeUserCreated,
 		},
 	}
 	message, _ := json.Marshal(userCreated)
