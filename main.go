@@ -44,6 +44,7 @@ func main() {
 	r.GET("/users", userController.GetUsers)
 	r.POST("/users", userController.CreateUser)
 	r.GET("/users/:id", userController.GetUserById)
+	r.DELETE("/users/:id", userController.DeleteUser)
 
 	r.Run(":8081")
 }

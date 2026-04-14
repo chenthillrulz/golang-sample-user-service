@@ -19,6 +19,23 @@ func NewUserController(r *gin.Engine, db *mongo.Database) *UserController {
 	return &UserController{Gin: r, db: db}
 }
 
+func (uc *UserController) DeleteUser(r *gin.Context) {
+	id := r.Param("id")
+
+	userCollection := uc.db.Collection("users")
+	objectID, err := bson.ObjectIDFromHex(id)
+	if err != nil {
+		r.JSON(400, gin.H{"error": "Invalid user ID", "details": err.Error()})
+		return
+	}
+	res, err := userCollection.DeleteOne(context.TODO(), bson.M{"_id": objectID})
+	if err != nil {
+		r.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete user", "details": err.Error()})
+		return
+	}
+	r.JSON(http.StatusOK, gin.H{"deletedCount": res.DeletedCount, "id": objectID})
+}
+
 func (uc *UserController) GetUserById(r *gin.Context) {
 	id := r.Param("id")
 

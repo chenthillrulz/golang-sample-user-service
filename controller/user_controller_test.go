@@ -56,6 +56,7 @@ func setupRouter() (*gin.Engine, *UserController) {
 	r.POST("/users", uc.CreateUser)
 	r.GET("/users", uc.GetUsers)
 	r.GET("/users/:id", uc.GetUserById)
+	r.DELETE("/users/:id", uc.DeleteUser)
 	return r, uc
 }
 
@@ -162,6 +163,58 @@ func TestGetUserById(t *testing.T) {
 
 	// Test invalid ID case
 	req, _ = http.NewRequestWithContext(t.Context(), "GET", "/users/invalid-id", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400 for invalid ID, got %d", w.Code)
+	}
+}
+
+func TestDeleteUser(t *testing.T) {
+	r, _ := setupRouter()
+
+	// Seed data
+	user := models.User{Name: "To Delete", Age: 50, Email: "delete@e.com"}
+	res, err := testDB.Collection("users").InsertOne(t.Context(), user)
+	if err != nil {
+		t.Fatalf("Failed to seed user: %v", err)
+	}
+	id := res.InsertedID.(bson.ObjectID).Hex()
+
+	// Test successful case
+	req, _ := http.NewRequestWithContext(t.Context(), "DELETE", "/users/"+id, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d. Body: %s", w.Code, w.Body.String())
+	}
+
+	var response map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("Failed to unmarshal response: %v", err)
+	}
+	if response["deletedCount"].(float64) != 1 {
+		t.Errorf("Expected deletedCount 1, got %v", response["deletedCount"])
+	}
+
+	// Test not found case
+	fakeId := bson.NewObjectID().Hex()
+	req, _ = http.NewRequestWithContext(t.Context(), "DELETE", "/users/"+fakeId, nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200 for fake ID, got %d", w.Code)
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &response)
+	if response["deletedCount"].(float64) != 0 {
+		t.Errorf("Expected deletedCount 0 for fake ID, got %v", response["deletedCount"])
+	}
+
+	// Test invalid ID case
+	req, _ = http.NewRequestWithContext(t.Context(), "DELETE", "/users/invalid-id", nil)
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
