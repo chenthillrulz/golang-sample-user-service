@@ -1,7 +1,7 @@
 # Sample user service
-Implements boiler plate for user service
+Implements basic crud user service
 - golang gin, 
 - mongodb official driver,
 - kafka franz-go client
 
-perform crud operations and emit events
+emits relevant events to kafka
